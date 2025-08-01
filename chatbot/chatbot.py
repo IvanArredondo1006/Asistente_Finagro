@@ -9,7 +9,7 @@ st.title("Asistente de Proyectos Finagro")
 # 📋 Sidebar con Logo e Instrucciones
 with st.sidebar:
     logo = Image.open("chatbot/logo Megag.png")  # Asegúrate de que el archivo esté en la carpeta correcta
-    st.image(logo, width=180)
+    st.image(logo, width=80)
 
     st.header("📋 Instrucciones de Consulta")
 
