@@ -22,8 +22,8 @@ with st.sidebar:
     - Utiliza datos precisos como NIT, montos , rubros etc
     - Para consultar por una empresa en concreto use el NIT sin DV
     - Las columnas más importantes son:
-        - **"NIT BENEFICIARIO"**
-        - **"FECHA DESEMBOLSO"**
+        - **NIT BENEFICIARIO**
+        - **FECHA DESEMBOLSO**
         - **RUBRO**
         - **VALOR DESEMBOLSADO**
     - Ejemplos de preguntas:
