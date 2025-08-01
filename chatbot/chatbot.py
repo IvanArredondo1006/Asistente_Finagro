@@ -5,10 +5,35 @@ import json
 st.set_page_config(page_title="Asistente de Proyectos Finagro", page_icon="🧠")
 st.title("🧠 Asistente de Proyectos Finagro")
 
+# 📋 Panel de Instrucciones
+with st.sidebar:
+    st.header("📋 Instrucciones de Consulta")
+
+    st.subheader("🔹 Consultas Normativa FINAGRO")
+    st.markdown("""
+    - Pregunta de manera general como:
+        - **¿Se puede financiar un tractor?**
+        - **¿Qué requisitos existen para pequeños productores?**
+        - **¿Qué líneas aplican para compra de maquinaria agrícola?**
+    """)
+
+    st.subheader("🔹 Consultas Datos MEGAG (SQL)")
+    st.markdown("""
+    - Utiliza datos precisos como NIT, montos , rubros etc
+    - Para consultar por una empresa en concreto use el NIT sin DV
+    - Las columnas más importantes son:
+        - **"NIT BENEFICIARIO"**
+        - **"FECHA DESEMBOLSO"**
+        - **RUBRO**
+        - **VALOR DESEMBOLSADO**
+    - Ejemplos de preguntas:
+        - **¿Cuántos desembolsos se han hecho a CREPES AND WAFFLES?**
+        - **¿Qué bancos han financiado el NIT 8020063911?**
+    """)
+
 #API_URL = "http://localhost:8000/asistente-finagro"
 API_URL = "https://day-nurse-lopez-criterion.trycloudflare.com/asistente-finagro"
 
-#https://day-nurse-lopez-criterion.trycloudflare.com
 # Inicializar variables en sesión si no existen
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
@@ -50,7 +75,6 @@ if prompt := st.chat_input("Haz tu pregunta sobre normativa o desembolsos"):
             else:
                 respuesta = f"⚠️ Error: {data.get('error', 'No se pudo procesar la pregunta.')}"
             
-
             # Si la respuesta trae resultados SQL, guardarlos para siguiente pregunta
             if "sql" in data and "resultados" in data:
                 st.session_state.ultimo_resultado_sql = data["resultados"]
