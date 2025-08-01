@@ -49,10 +49,12 @@ if prompt := st.chat_input("Haz tu pregunta sobre normativa o desembolsos"):
                 respuesta = data["respuesta"]
             else:
                 respuesta = f"⚠️ Error: {data.get('error', 'No se pudo procesar la pregunta.')}"
+            
 
             # Si la respuesta trae resultados SQL, guardarlos para siguiente pregunta
             if "sql" in data and "resultados" in data:
                 st.session_state.ultimo_resultado_sql = data["resultados"]
+                st.code(data["sql"], language='sql')
             else:
                 st.session_state.ultimo_resultado_sql = None
 
