@@ -33,10 +33,14 @@ def generar_sql(pregunta: str, contexto: str) -> str:
     prompt = (
         "Eres un generador de consultas SQL para PostgreSQL. "
         "Tu única salida debe ser una consulta que comience por SELECT, sin ningún texto adicional. "
+        "Reglas importantes:\n"
+        "- Siempre encierra los nombres de columnas entre comillas dobles (\"\").\n"
+        "- No asumas filtros adicionales a menos que la pregunta los mencione explícitamente.\n"
         "Este es el esquema de la base de datos:\n"
         f"{SCHEMA_DESCRIPCION}\n\n"
         f"Este es el contexto del manual de FINAGRO:\n{contexto}"
     )
+
     respuesta = client.chat.completions.create(
         model="gpt-4o",
         messages=[

@@ -2,7 +2,7 @@ import pandas as pd
 from sqlalchemy import create_engine
 
 # Leer el archivo Excel limpio
-df = pd.read_excel("data/base_limpia_postgresql.xlsx")  # o el nombre del archivo que descargaste
+df = pd.read_excel("base_limpia_postgresql.xlsx")  # o el nombre del archivo que descargaste
 
 # Parámetros de conexión
 usuario = 'postgres'
