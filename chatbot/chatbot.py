@@ -1,12 +1,16 @@
 import streamlit as st
 import requests
 import json
+from PIL import Image
 
 st.set_page_config(page_title="Asistente de Proyectos Finagro", page_icon="🧠")
-st.title("🧠 Asistente de Proyectos Finagro")
+st.title("Asistente de Proyectos Finagro")
 
-# 📋 Panel de Instrucciones
+# 📋 Sidebar con Logo e Instrucciones
 with st.sidebar:
+    logo = Image.open("logo Megag.png")  # Asegúrate de que el archivo esté en la carpeta correcta
+    st.image(logo, width=180)
+
     st.header("📋 Instrucciones de Consulta")
 
     st.subheader("🔹 Consultas Normativa FINAGRO")
@@ -31,7 +35,6 @@ with st.sidebar:
         - **¿Bajo que rubro se desembolso a la empresa con NIT 800009632?**
     """)
 
-#API_URL = "http://localhost:8000/asistente-finagro"
 API_URL = "https://day-nurse-lopez-criterion.trycloudflare.com/asistente-finagro"
 
 # Inicializar variables en sesión si no existen
@@ -75,7 +78,7 @@ if prompt := st.chat_input("Haz tu pregunta sobre normativa o desembolsos"):
             else:
                 respuesta = f"⚠️ Error: {data.get('error', 'No se pudo procesar la pregunta.')}"
             
-            # Si la respuesta trae resultados SQL, guardarlos para siguiente pregunta
+            # Mostrar SQL si viene en la respuesta
             if "sql" in data and "resultados" in data:
                 st.session_state.ultimo_resultado_sql = data["resultados"]
                 st.code(data["sql"], language='sql')
