@@ -27,8 +27,8 @@ with st.sidebar:
         - **RUBRO**
         - **VALOR DESEMBOLSADO**
     - Ejemplos de preguntas:
-        - **¿Cuántos desembolsos se han hecho a CREPES AND WAFFLES?**
-        - **¿Qué bancos han financiado el NIT 8020063911?**
+        - **Cuántos desembolsos se han hecho bajo el NIT 800009632?**
+        - **¿Bajo que rubro se desembolso a la empresa con NIT 800009632?**
     """)
 
 #API_URL = "http://localhost:8000/asistente-finagro"
