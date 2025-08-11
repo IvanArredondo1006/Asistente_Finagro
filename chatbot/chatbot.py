@@ -35,7 +35,7 @@ with st.sidebar:
         - **¿Bajo que rubro se desembolso a la empresa con NIT 800009632?**
     """)
 
-API_URL = "https://day-nurse-lopez-criterion.trycloudflare.com/asistente-finagro"
+API_URL = "https://wanted-switching-concerning-sends.trycloudflare.com/asistente_finagro"
 
 # Inicializar variables en sesión si no existen
 if "chat_history" not in st.session_state:
