@@ -50,12 +50,11 @@ with st.sidebar:
         index=0,
     )
 
-    DEFAULT_ASSISTANT_API_URL = "http://127.0.0.1:8002/asistente-finagro"
-    DEFAULT_SQL_API_URL = "http://127.0.0.1:8002/asistente-sql"
+    DEFAULT_ASSISTANT_API_URL = "http://127.0.0.1:8000/asistente-finagro"
+    DEFAULT_SQL_API_URL = "http://127.0.0.1:8000/asistente-sql"
 
-    # Endpoints fijos (no visibles en el front)
-    assistant_api_url = DEFAULT_ASSISTANT_API_URL
-    sql_api_url = DEFAULT_SQL_API_URL
+    assistant_api_url = st.text_input("Endpoint Asistente Finagro", value=DEFAULT_ASSISTANT_API_URL)
+    sql_api_url = st.text_input("Endpoint SQL", value=DEFAULT_SQL_API_URL)
 
 # Estado de sesión
 if "chat_history" not in st.session_state:
@@ -97,9 +96,10 @@ if prompt := st.chat_input("Haz tu pregunta (normativa o SQL)"):
             else:
                 respuesta = f"Error: {data.get('error', 'No se pudo procesar la pregunta.')}"
 
-            # No mostrar la consulta SQL en el front
-            if "resultados" in data:
+            # Mostrar SQL si viene en la respuesta
+            if "sql" in data and "resultados" in data:
                 st.session_state.ultimo_resultado_sql = data["resultados"]
+                st.code(data["sql"], language='sql')
             else:
                 st.session_state.ultimo_resultado_sql = None
 
@@ -114,3 +114,4 @@ if st.button("Reiniciar Conversación"):
     st.session_state.chat_history = []
     st.session_state.ultimo_resultado_sql = None
     st.rerun()
+

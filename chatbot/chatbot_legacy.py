@@ -1,0 +1,114 @@
+import streamlit as st
+import requests
+import json
+from PIL import Image
+
+st.set_page_config(page_title="Asistente de Proyectos Finagro", page_icon="�Y��")
+st.title("�Y�� Asistente de Proyectos Finagro")
+
+# �Y"< Sidebar con Logo e Instrucciones
+with st.sidebar:
+    logo = Image.open("chatbot/logo Megag.png")  # Asegǧrate de que el archivo estǸ en la carpeta correcta
+    st.image(logo, width=90)
+
+    st.header("�Y"< Instrucciones de Consulta")
+
+    st.subheader("�Y"� Consultas Normativa FINAGRO")
+    st.markdown("""
+    - Pregunta de manera general como:
+        - **��Se puede financiar un tractor?**
+        - **��QuǸ requisitos existen para peque��os productores?**
+        - **��QuǸ l��neas aplican para compra de maquinaria agr��cola?**
+    """)
+
+    st.subheader("�Y"� Consultas Datos MEGAG (SQL)")
+    st.markdown("""
+    - Utiliza datos precisos como NIT, montos , rubros etc
+    - Para consultar por una empresa en concreto use el NIT sin DV
+    - Las columnas mǭs importantes son:
+        - **NIT BENEFICIARIO**
+        - **FECHA DESEMBOLSO**
+        - **RUBRO**
+        - **VALOR DESEMBOLSADO**
+    - Ejemplos de preguntas:
+        - **Cuǭntos desembolsos se han hecho bajo el NIT 800009632?**
+        - **��Bajo que rubro se desembolso a la empresa con NIT 800009632?**
+    """)
+
+# Selector de modo y endpoints para cada backend
+st.subheader("Modo de consulta")
+mode = st.selectbox(
+    "Selecciona el modo",
+    ["SQL (MEGAG)", "Visi��n PDF"],
+    index=0,
+)
+
+# Endpoints por defecto (ajusta si cambias puertos)
+DEFAULT_SQL_API_URL = "http://127.0.0.1:8000/asistente-finagro"
+DEFAULT_VISION_API_URL = "http://127.0.0.1:8001/preguntar-libre-vision"
+sql_api_url = st.text_input("Endpoint SQL", value=DEFAULT_SQL_API_URL)
+vision_api_url = st.text_input("Endpoint Visi��n PDF", value=DEFAULT_VISION_API_URL)
+
+# Inicializar variables en sesi��n si no existen
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
+
+if "ultimo_resultado_sql" not in st.session_state:
+    st.session_state.ultimo_resultado_sql = None
+
+# Mostrar historial en pantalla
+for mensaje in st.session_state.chat_history:
+    with st.chat_message(mensaje["role"]):
+        st.markdown(mensaje["content"])
+
+# Entrada del usuario
+if prompt := st.chat_input("Haz tu pregunta sobre normativa o desembolsos"):
+    st.chat_message("user").markdown(prompt)
+    st.session_state.chat_history.append({"role": "user", "content": prompt})
+
+    with st.spinner("Consultando..."):
+        try:
+            historial_limitado = st.session_state.chat_history[-10:]
+
+            # Asegurar que ultimo_resultado_sql siempre sea lista o None, nunca null
+            ultimo_sql = st.session_state.ultimo_resultado_sql
+            if not ultimo_sql:
+                ultimo_sql = None
+
+            headers = {"Content-Type": "application/json"}
+            payload = {
+                "pregunta": prompt,
+                "historial": historial_limitado,
+                "ultimo_resultado_sql": ultimo_sql
+            }
+
+            if mode == "SQL (MEGAG)":
+                response = requests.post(sql_api_url, headers=headers, data=json.dumps(payload))
+            else:
+                response = requests.get(vision_api_url, params={"pregunta": prompt})
+            data = response.json()
+
+            if "respuesta" in data:
+                respuesta = data["respuesta"]
+            else:
+                respuesta = f"�s���? Error: {data.get('error', 'No se pudo procesar la pregunta.')}"
+            
+            # Mostrar SQL si viene en la respuesta
+            if "sql" in data and "resultados" in data:
+                st.session_state.ultimo_resultado_sql = data["resultados"]
+                st.code(data["sql"], language='sql')
+            else:
+                st.session_state.ultimo_resultado_sql = None
+
+        except Exception as e:
+            respuesta = f"�?O Error al conectar con el backend: {e}"
+
+    st.chat_message("assistant").markdown(respuesta)
+    st.session_state.chat_history.append({"role": "assistant", "content": respuesta})
+
+# Bot��n para resetear la memoria
+if st.button("�Y"" Reiniciar Conversaci��n"):
+    st.session_state.chat_history = []
+    st.session_state.ultimo_resultado_sql = None
+    st.rerun()
+
