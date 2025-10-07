@@ -4,20 +4,30 @@ import json
 import re
 import logging
 import base64
-import io
-import csv
+import time
+from io import BytesIO
 
-from app.classifier import clasificar_pregunta
 from app.sql_agent import generar_sql, ejecutar_sql, generar_respuesta_sql
 from app.assistant_agent import consultar_assistant
 from models.payload import PreguntaPayload
 
+try:
+    import pandas as pd  # type: ignore
+except ImportError:
+    pd = None  # type: ignore
+try:
+    from openpyxl import Workbook  # type: ignore
+except ImportError:
+    Workbook = None  # type: ignore
+
+
+
 router = APIRouter()
 
 # Logger básico para evitar NameError
-LOGGER = logging.getLogger("asistente_finagro")
-if not LOGGER.handlers:
-    logging.basicConfig(level=logging.INFO)
+# LOGGER = logging.getLogger("asistente_finagro")
+# if not LOGGER.handlers:
+#     logging.basicConfig(level=logging.INFO)
 
 STOPWORDS_BENEFICIARIO = {
     "de", "del", "la", "el", "los", "las", "para", "por", "con", "sin", "sobre",
@@ -25,6 +35,90 @@ STOPWORDS_BENEFICIARIO = {
     "quien", "quienes", "beneficiario", "empresa", "nit", "existe", "exsito",
     "datos", "donde", "cuanto", "caul", "cliente", "opera",
 }
+
+### NUEVO BLOQUE ###
+
+# --- Helpers SQL ---
+
+def _escape_sql_literal(value: str) -> str:
+    # Escapa comillas simples para SQL seguro
+    return (value or "").replace("'", "''")
+
+def _col_norm(col: str = '"BENEFICIARIO"') -> str:
+    # Columna normalizada para búsquedas tolerantes a tildes y mayúsculas
+    return f'unaccent(upper({col}))'
+
+def _like_norm_expr(literal: str) -> str:
+    # Construye un LIKE normalizado: %literal%
+    lit = _escape_sql_literal(literal)
+    # '% ' || unaccent(upper('texto')) || ' %' evita colisiones de funciones
+    return f"{_col_norm()} LIKE ('%' || unaccent(upper('{lit}')) || '%')"
+
+def _and_ilike_tokens(tokens: List[str]) -> str:
+    # Combina varios términos con AND (todos deben aparecer)
+    conds = [ _like_norm_expr(t) for t in tokens if t.strip() ]
+    return " AND ".join(conds) if conds else "TRUE"
+
+def _pg_trgm_similarity_expr(literal: str) -> Tuple[str, str]:
+    # Devuelve (select_list, where_cond) usando similarity() de pg_trgm
+    lit = _escape_sql_literal(literal)
+    sel = f'{_col_norm()} as nombre_norm, similarity({_col_norm()}, unaccent(upper(\'{lit}\'))) AS sim'
+    whr = f"similarity({_col_norm()}, unaccent(upper('{lit}'))) > 0.25"
+    return sel, whr
+
+def _levenshtein_order_expr(literal: str) -> str:
+    # Ordena por distancia Levenshtein (requiere fuzzystrmatch)
+    lit = _escape_sql_literal(literal)
+    return f'levenshtein({_col_norm()}, unaccent(upper(\'{lit}\'))) ASC'
+
+
+def _construir_sql_forzado(sql_base: Optional[str], beneficiario: str) -> Optional[str]:
+    """
+    Incrusta/reemplaza el filtro por beneficiario usando normalización con unaccent+upper.
+    Si sql_base es None o no parece un SELECT, devuelve None.
+    """
+    if not sql_base or not sql_base.strip().lower().startswith("select"):
+        return None
+
+    b = _escape_sql_literal(beneficiario)
+    cond_canon = f"{_col_norm()} LIKE ('%' || unaccent(upper('{b}')) || '%')"
+
+    sql = sql_base
+
+    # Patrones de filtro comunes a reemplazar
+    patrones = [
+        r'("BENEFICIARIO"\s*=\s*\'.*?\')',
+        r'("BENEFICIARIO"\s+ILIKE\s+\'.*?\')',
+        r'(LOWER\("BENEFICIARIO"\)\s+LIKE\s+\'.*?\')',
+        r'(unaccent\(\s*upper\(\s*"BENEFICIARIO"\s*\)\s*\)\s+LIKE\s+\'.*?\')',
+    ]
+
+    reemplazado = False
+    for pat in patrones:
+        if re.search(pat, sql, flags=re.IGNORECASE | re.DOTALL):
+            sql = re.sub(pat, cond_canon, sql, flags=re.IGNORECASE | re.DOTALL)
+            reemplazado = True
+
+    if not reemplazado:
+        # Insertar WHERE/AND según corresponda
+        if re.search(r'\bWHERE\b', sql, flags=re.IGNORECASE):
+            sql = re.sub(r'\bWHERE\b', f'WHERE {cond_canon} AND ', sql, flags=re.IGNORECASE, count=1)
+        else:
+            # Insertar WHERE antes de ORDER BY / LIMIT / fin
+            m = re.search(r'\b(ORDER\s+BY|LIMIT)\b', sql, flags=re.IGNORECASE)
+            if m:
+                idx = m.start()
+                sql = sql[:idx] + f' WHERE {cond_canon} ' + sql[idx:]
+            else:
+                sql = sql.rstrip() + f' WHERE {cond_canon}'
+
+    return sql
+
+
+### FIN DEL NUEVO BLOQUE ###
+
+
+
 
 
 def _extraer_candidatos_beneficiario(texto: str) -> List[str]:
@@ -48,40 +142,123 @@ def _extraer_candidatos_beneficiario(texto: str) -> List[str]:
 
 
 def _buscar_beneficiarios_similares(candidatos: List[str], limite: int = 5) -> List[str]:
-    if not candidatos:
-        return []
+    """
+    Devuelve sugerencias robustas por:
+      1) ILIKE normalizado (%token%)
+      2) ILIKE combinado por tokens (AND)
+      3) pg_trgm: similarity(normalizado, normalizado) > umbral
+      4) levenshtein (si está disponible)
+    """
     sugerencias: List[str] = []
     vistos: set[str] = set()
+
+    if not candidatos:
+        return sugerencias
+
+    # 1) ILIKE por token individual (normalizado con unaccent+upper)
     for token in candidatos:
         if len(sugerencias) >= limite:
             break
-        patron = token.strip().upper()
-        if not patron:
+        pat = token.strip()
+        if not pat:
             continue
-        patron = patron.replace("'", "''")
         sql = (
             'SELECT DISTINCT "BENEFICIARIO" '
             'FROM beneficiarios '
-            f'WHERE "BENEFICIARIO" ILIKE \'%{patron}%\' '
+            f'WHERE {_like_norm_expr(pat)} '
             'ORDER BY "BENEFICIARIO" '
             f'LIMIT {max(1, limite - len(sugerencias))}'
         )
         try:
             filas = ejecutar_sql(sql)
-        except Exception as exc:  # noqa: BLE001
-            LOGGER.warning("[assistant_route] Falla sugiriendo beneficiarios para '%s': %s", token, exc)
-            continue
+            for fila in filas or []:
+                nombre = fila.get("BENEFICIARIO") if isinstance(fila, dict) else None
+                if nombre and nombre not in vistos:
+                    vistos.add(nombre)
+                    sugerencias.append(nombre)
+                    if len(sugerencias) >= limite:
+                        break
+        except Exception as exc:
+            print(f"[buscar_similares] ILIKE unaccent fallo para '{pat}': {exc}")
+
+    if len(sugerencias) >= limite:
+        return sugerencias
+
+    # 2) ILIKE combinando varios tokens con AND (nombres largos)
+    tokens_relev = [t for t in candidatos if len(t.strip()) >= 3][:3]  # hasta 3 tokens
+    if tokens_relev:
+        cond_and = _and_ilike_tokens(tokens_relev)
+        sql_and = (
+            'SELECT DISTINCT "BENEFICIARIO" '
+            'FROM beneficiarios '
+            f'WHERE {cond_and} '
+            'ORDER BY "BENEFICIARIO" '
+            f'LIMIT {max(1, limite - len(sugerencias))}'
+        )
+        try:
+            filas = ejecutar_sql(sql_and)
+            for fila in filas or []:
+                nombre = fila.get("BENEFICIARIO") if isinstance(fila, dict) else None
+                if nombre and nombre not in vistos:
+                    vistos.add(nombre)
+                    sugerencias.append(nombre)
+                    if len(sugerencias) >= limite:
+                        break
+        except Exception as exc:
+            print(f"[buscar_similares] ILIKE AND fallo: {exc}")
+
+    if len(sugerencias) >= limite:
+        return sugerencias
+
+    # 3) pg_trgm similarity (si disponible)
+    try:
+        # usa el primer token más informativo como anzuelo
+        mejor = max(tokens_relev or candidatos, key=len)
+        sel, whr = _pg_trgm_similarity_expr(mejor)
+        sql_trgm = (
+            f'SELECT DISTINCT "BENEFICIARIO", {sel} '
+            'FROM beneficiarios '
+            f'WHERE {whr} '
+            'ORDER BY sim DESC '
+            f'LIMIT {max(1, limite - len(sugerencias))}'
+        )
+        filas = ejecutar_sql(sql_trgm)
         for fila in filas or []:
             nombre = fila.get("BENEFICIARIO") if isinstance(fila, dict) else None
-            if not nombre:
-                continue
-            if nombre in vistos:
-                continue
-            vistos.add(nombre)
-            sugerencias.append(nombre)
-            if len(sugerencias) >= limite:
-                break
+            if nombre and nombre not in vistos:
+                vistos.add(nombre)
+                sugerencias.append(nombre)
+                if len(sugerencias) >= limite:
+                    break
+    except Exception as exc:
+        print(f"[buscar_similares] pg_trgm similarity no disponible/errores: {exc}")
+
+    if len(sugerencias) >= limite:
+        return sugerencias
+
+    # 4) levenshtein como plan C
+    try:
+        mejor = max(tokens_relev or candidatos, key=len)
+        order_lev = _levenshtein_order_expr(mejor)
+        sql_lev = (
+            'SELECT DISTINCT "BENEFICIARIO" '
+            'FROM beneficiarios '
+            'ORDER BY ' + order_lev + ' '
+            f'LIMIT {max(1, limite - len(sugerencias))}'
+        )
+        filas = ejecutar_sql(sql_lev)
+        for fila in filas or []:
+            nombre = fila.get("BENEFICIARIO") if isinstance(fila, dict) else None
+            if nombre and nombre not in vistos:
+                vistos.add(nombre)
+                sugerencias.append(nombre)
+                if len(sugerencias) >= limite:
+                    break
+    except Exception as exc:
+        print(f"[buscar_similares] levenshtein no disponible/errores: {exc}")
+
     return sugerencias
+
 
 
 def _ajustar_sql_con_sugerencias(sql: str, sugerencias: List[str]) -> Tuple[str, bool]:
@@ -150,34 +327,38 @@ def _solicita_excel(pregunta: str, historial: List[Dict[str, Any]]) -> bool:
 
 
 def _generar_excel_desde_resultados(filas: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """
-    Genera un CSV en base64 (compatible con Excel) para evitar dependencias.
-    Retorna payload con nombre y contenido.
-    """
     if not filas:
         return None
-    # columnas en orden determinista
-    columnas: List[str] = sorted({k for fila in filas for k in fila.keys()})
-    buffer = io.StringIO()
-    writer = csv.DictWriter(buffer, fieldnames=columnas, extrasaction="ignore")
-    writer.writeheader()
-    for fila in filas:
-        writer.writerow({k: fila.get(k, "") for k in columnas})
-    contenido_csv = buffer.getvalue().encode("utf-8-sig")  # BOM para Excel
-    contenido_b64 = base64.b64encode(contenido_csv).decode("ascii")
+
+    columnas = list(filas[0].keys())
+    buffer = BytesIO()
+    try:
+        if pd is not None:
+            df = pd.DataFrame(filas)  # type: ignore[arg-type]
+            df.to_excel(buffer, index=False)
+        elif Workbook is not None:
+            workbook = Workbook()
+            hoja = workbook.active
+            if columnas:
+                hoja.append(columnas)
+            for fila in filas:
+                hoja.append([fila.get(col) for col in columnas])
+            workbook.save(buffer)
+        else:
+            return None
+    except Exception:
+        return None
+
+    buffer.seek(0)
+    contenido_b64 = base64.b64encode(buffer.read()).decode('utf-8')
     return {
-        "filename": "resultados.csv",
-        "mime": "text/csv",
+        "filename": f"reporte_{int(time.time())}.xlsx",
+        "mime": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "base64": contenido_b64,
-        "rows": len(filas),
-        "columns": columnas,
     }
 
 
-def _resolver_sql_con_reintentos(
-    pregunta: str,
-    contexto: str
-) -> Tuple[List[Dict[str, Any]], Optional[str], List[Dict[str, Any]], Optional[str], List[str]]:
+def _resolver_sql_con_reintentos(pregunta: str, contexto: str) -> tuple[List[Dict[str, Any]], Optional[str], List[Dict[str, Any]], Optional[str], List[str]]:
     intentos: List[Dict[str, Any]] = []
     ultimo_sql: Optional[str] = None
     ultimo_error: Optional[str] = None
@@ -185,53 +366,36 @@ def _resolver_sql_con_reintentos(
 
     candidatos = _extraer_candidatos_beneficiario(pregunta)
     sugerencias = _buscar_beneficiarios_similares(candidatos)
-    contexto_enriquecido = contexto or ""
+    contexto_enriquecido = (contexto or "").strip()
     if sugerencias:
-        bloque_sugerencias = "Sugerencias de beneficiario:\n" + "\n".join(f"- {nombre}" for nombre in sugerencias)
-        contexto_enriquecido = (contexto_enriquecido + "\n" + bloque_sugerencias).strip()
-    else:
-        contexto_enriquecido = contexto_enriquecido.strip()
-
-    pregunta_para_sql = pregunta
-    if sugerencias:
-        nombres_sugeridos = ", ".join(sugerencias[:5])
-        instruccion = (
-            "Si aplicas filtros por beneficiario, usa exactamente alguno de estos nombres: "
-            f"{nombres_sugeridos}."
+        can = sugerencias[0]
+        bloque_sugerencias = (
+            "Sugerencias de beneficiario:\n" + "\n".join(f"- {nombre}" for nombre in sugerencias) +
+            f"\nDirectiva_SQL: Si filtras por beneficiario, usa ILIKE con este literal canónico: '%{can}%'"
         )
-        pregunta_para_sql = f"{pregunta}. {instruccion}"
+        contexto_enriquecido = (contexto_enriquecido + "\n" + bloque_sugerencias).strip()
 
+    # Intentos "normales" (hasta 3)
     for intento in range(1, 4):
         intento_info: Dict[str, Any] = {"intento": intento}
         try:
-            sql_generado = generar_sql(
-                pregunta_para_sql,
-                contexto=contexto_enriquecido,
-                sugerencias_beneficiario=sugerencias,
-            )
-            intento_info["sql_generado"] = sql_generado
-            sql_ejecutar = sql_generado
-            if sugerencias:
-                sql_ejecutar, ajustado = _ajustar_sql_con_sugerencias(sql_ejecutar, sugerencias)
-                if ajustado:
-                    intento_info["sql_ajustado"] = sql_ejecutar
-                    intento_info["ajuste_beneficiario"] = sugerencias[0]
-            intento_info["sql"] = sql_ejecutar
-            ultimo_sql = sql_ejecutar
+            sql = generar_sql(pregunta, contexto=contexto_enriquecido)
+            ultimo_sql = sql
+            intento_info["sql"] = sql
         except Exception as exc:  # noqa: BLE001
             ultimo_error = str(exc)
             intento_info["error"] = f"generacion: {ultimo_error}"
             intentos.append(intento_info)
             continue
 
-        if not sql_ejecutar.lower().startswith("select"):
-            ultimo_error = f"Consulta no válida generada: {sql_ejecutar}"
+        if not sql.lower().startswith("select"):
+            ultimo_error = f"Consulta no valida generada: {sql}"
             intento_info["error"] = ultimo_error
             intentos.append(intento_info)
             continue
 
         try:
-            resultados = ejecutar_sql(sql_ejecutar) or []
+            resultados = ejecutar_sql(sql)
             intento_info["filas"] = len(resultados)
             intentos.append(intento_info)
         except Exception as exc:  # noqa: BLE001
@@ -242,10 +406,36 @@ def _resolver_sql_con_reintentos(
 
         if resultados:
             return resultados, ultimo_sql, intentos, None, sugerencias
+
         intento_info["error"] = "sin_resultados"
         ultimo_error = "Consulta sin resultados"
 
+    # Fallback "forzado" con beneficiario canónico si hay sugerencias y teníamos un SQL base
+    if not resultados and sugerencias and ultimo_sql:
+        for suger in sugerencias:
+            sql_forzado = _construir_sql_forzado(ultimo_sql, suger)
+            if not sql_forzado:
+                continue
+            intento_fx: Dict[str, Any] = {
+                "intento": "forzado",
+                "beneficiario_forzado": suger,
+                "sql_forzado": sql_forzado,
+            }
+            try:
+                res_fx = ejecutar_sql(sql_forzado)
+                intento_fx["filas"] = len(res_fx or [])
+                intentos.append(intento_fx)
+                if res_fx:
+                    # Éxito en forzado: devolvemos estos resultados
+                    return res_fx, ultimo_sql, intentos, None, sugerencias
+            except Exception as exc:
+                intento_fx["error"] = f"ejecucion_forzado: {exc}"
+                intentos.append(intento_fx)
+                continue
+
     return (resultados if resultados else []), ultimo_sql, intentos, ultimo_error, sugerencias
+
+
 
 
 @router.post("/asistente-finagro")
@@ -258,60 +448,6 @@ async def asistente_finagro(payload: PreguntaPayload):
     for msg in historial[-10:]:
         contexto_conversacional += f"{msg['role']}: {msg['content']}\n"
 
-    tipo = clasificar_pregunta(pregunta)
-    solicitar_excel = _solicita_excel(pregunta, historial)
-    if solicitar_excel:
-        tipo = "sql"
-
-    if tipo == "sql":
-        datos, sql_generado, intentos_sql, error_sql, sugerencias_beneficiario = _resolver_sql_con_reintentos(
-            pregunta, contexto_conversacional
-        )
-
-        excel_payload = _generar_excel_desde_resultados(datos) if solicitar_excel else None
-        advertencia_sin_datos = _mensaje_sin_resultados_con_sugerencias(sugerencias_beneficiario) if not datos else ""
-        if solicitar_excel:
-            if datos:
-                respuesta = "Genero un archivo Excel con los datos solicitados."
-            else:
-                respuesta = "La consulta no produjo datos, por lo que no se generó el archivo Excel."
-            hechos: List[Dict[str, Any]] = []
-            if advertencia_sin_datos:
-                respuesta = f"{respuesta} {advertencia_sin_datos}".strip()
-        else:
-            respuesta, hechos = generar_respuesta_sql(pregunta, datos)
-            if advertencia_sin_datos:
-                respuesta = f"{respuesta}\n\n{advertencia_sin_datos}" if respuesta else advertencia_sin_datos
-
-        payload_resp: Dict[str, Any] = {
-            "respuesta": respuesta,
-            "resultados": datos,
-            "intentos_sql": intentos_sql,
-            "sugerencias_beneficiario": sugerencias_beneficiario,
-        }
-        if sql_generado:
-            payload_resp["sql"] = sql_generado
-        if hechos:
-            payload_resp["hechos"] = hechos
-        if error_sql:
-            payload_resp["error_sql"] = error_sql
-        if excel_payload:
-            payload_resp["excel"] = excel_payload
-
-        LOGGER.info(json.dumps({
-            "endpoint": "asistente_finagro",
-            "tipo": "sql",
-            "pregunta": pregunta,
-            "filas": len(datos),
-            "sql": sql_generado,
-            "solicitar_excel": solicitar_excel,
-            "excel_generado": bool(excel_payload),
-            "error_sql": error_sql,
-            "intentos_sql": intentos_sql,
-        }, ensure_ascii=False))
-
-        return payload_resp
-
     contexto_sql = f"Resultado anterior:\n{json.dumps(ultimo_sql, ensure_ascii=False)}\n" if ultimo_sql else ""
     prompt_con_historial = f"{contexto_conversacional}\n{contexto_sql}\nUsuario: {pregunta}"
 
@@ -319,14 +455,12 @@ async def asistente_finagro(payload: PreguntaPayload):
     respuesta_manual = consultar_assistant(prompt_con_historial)
 
     payload_manual: Dict[str, Any] = {"respuesta": respuesta_manual, "sugerencias_beneficiario": sugerencias_beneficiario}
-    LOGGER.info(json.dumps({
-        "endpoint": "asistente_finagro",
-        "tipo": "manual",
-        "pregunta": pregunta,
-        "solicitar_excel": solicitar_excel,
-    }, ensure_ascii=False))
+    # LOGGER.info(json.dumps({
+    #     "endpoint": "asistente_finagro",
+    #     "tipo": "manual",
+    #     "pregunta": pregunta,
+    # }, ensure_ascii=False))
     return payload_manual
-
 
 @router.post("/asistente-sql")
 async def asistente_sql(payload: PreguntaPayload):

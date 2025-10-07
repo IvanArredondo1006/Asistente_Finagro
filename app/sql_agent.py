@@ -13,6 +13,8 @@ from app.rag import retrieve_facts
 from utils.diccionario import column_synonyms
 
 CLIENT_TIMEOUT = int(os.getenv("OPENAI_TIMEOUT", "30"))
+SUMMARY_THRESHOLD_CHARS = int(os.getenv("SQL_AGENT_SUMMARY_THRESHOLD", "900"))
+SUMMARY_MAX_TOKENS = int(os.getenv("SQL_AGENT_SUMMARY_MAX_TOKENS", "400"))
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 
@@ -412,6 +414,33 @@ def _construir_sql_heuristico(pregunta: str, contexto: str, mapeos: Dict[str, Li
 
 
 
+
+
+def _resumir_respuesta_larga(texto: str, total_filas: int) -> Optional[str]:
+    try:
+        system_prompt = (
+            "Eres analista de datos. Resume la informacion en un maximo de cinco bullets o tres frases. "
+            "Incluye cifras clave y termina invitando al usuario a pedir un Excel para ver todos los detalles."
+        )
+        user_content = f"Filas totales: {total_filas}\nTexto completo:\n{texto}"
+        respuesta = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content},
+            ],
+            max_tokens=SUMMARY_MAX_TOKENS,
+            temperature=0,
+            timeout=CLIENT_TIMEOUT,
+        )
+        resumen = respuesta.choices[0].message.content.strip()
+        if resumen:
+            if 'excel' not in resumen.lower():
+                resumen += "\n\nSi necesitas el detalle completo, pideme un Excel con la informacion."
+            return resumen
+    except Exception:
+        return None
+    return None
 def generar_sql(pregunta: str, contexto: str, sugerencias_beneficiario: Optional[List[str]] = None) -> str:
     t0 = time.time()
     sugerencias_limpias = [nombre for nombre in (sugerencias_beneficiario or []) if nombre]
@@ -586,10 +615,18 @@ def generar_respuesta_sql(
     respuesta = client.chat.completions.create(
         model="gpt-4o",
         messages=mensajes,
-        max_tokens=700,
+        max_tokens=1000,
         temperature=0.2,
         timeout=CLIENT_TIMEOUT,
     )
     texto = respuesta.choices[0].message.content.strip()
+    if len(texto) > SUMMARY_THRESHOLD_CHARS:
+        resumen = _resumir_respuesta_larga(texto, len(datos))
+        if resumen:
+            texto = resumen
+        else:
+            texto = texto[:SUMMARY_THRESHOLD_CHARS].rstrip() + "..."
+            if "excel" not in texto.lower():
+                texto += "\n\nSi necesitas el detalle completo, pideme un Excel con la informacion."
     print(f"[sql_agent] Respuesta generada en {time.time()-t0:.2f}s")
     return texto, usados
