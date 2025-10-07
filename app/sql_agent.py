@@ -410,32 +410,37 @@ def _construir_sql_heuristico(pregunta: str, contexto: str, mapeos: Dict[str, Li
     return sql
 
 
-def generar_sql(pregunta: str, contexto: str) -> str:
-    t0 = time.time()
-    print(f"[sql_agent] Generando SQL para: {pregunta[:120]}")
 
+
+def generar_sql(pregunta: str, contexto: str, sugerencias_beneficiario: Optional[List[str]] = None) -> str:
+    t0 = time.time()
+    sugerencias_limpias = [nombre for nombre in (sugerencias_beneficiario or []) if nombre]
+    print(f"[sql_agent] Generando SQL para: {pregunta[:120]}")
     mapeos = _detectar_mapeos(pregunta, contexto)
     pistas_texto = _formatear_pistas(mapeos)
     bancos_detectados = _extraer_bancos_canonicos(pregunta, contexto)
     if bancos_detectados:
         pistas_texto += "\nBancos detectados: " + ", ".join(bancos_detectados)
-
-    filtra_beneficiario = "BENEFICIARIO" in mapeos
+    if sugerencias_limpias:
+        pistas_texto += (
+            "\nCoincidencias de beneficiario detectadas:\n"
+            + "\n".join(f"- {nombre}" for nombre in sugerencias_limpias[:5])
+        )
+    filtra_beneficiario = "BENEFICIARIO" in mapeos or bool(sugerencias_limpias)
+    terminos_beneficiario = mapeos.get("BENEFICIARIO") or []
+    if not terminos_beneficiario and sugerencias_limpias:
+        terminos_beneficiario = sugerencias_limpias
     ejemplo_beneficiario = ""
     if filtra_beneficiario:
-        terminos_beneficiario = mapeos.get("BENEFICIARIO") or []
         candidato = terminos_beneficiario[0] if terminos_beneficiario else ""
         for termino in terminos_beneficiario:
             if _normalizar(termino) != _normalizar("BENEFICIARIO"):
                 candidato = termino
                 break
         candidato = candidato.upper()
-        ejemplo_beneficiario = candidato
-        ejemplo_beneficiario = ejemplo_beneficiario.replace(chr(34), "").replace("%", "").strip()
-
-
+        ejemplo_beneficiario = candidato.replace(chr(34), "").replace("%", "").strip()
     reglas = [
-        "- Siempre encierra los nombres de columnas entre comillas dobles (\"\").",
+        "- Siempre encierra los nombres de columnas entre comillas dobles ("").",
         "- No asumas filtros adicionales a menos que la pregunta los mencione explicitamente.",
         "- Si el usuario no menciona filtros clave (p. ej., NIT o ID), reutiliza los presentes en el contexto si existen.",
         "- Si la pregunta es ambigua, devuelve la mejor consulta que responda con los datos disponibles, prefiriendo conteos o listados generales.",
@@ -446,28 +451,26 @@ def generar_sql(pregunta: str, contexto: str) -> str:
         reglas.append("- Cuando la consulta pida resultados por BANCA, agrupa por \"BANCA\" y calcula el porcentaje sobre el total del banco. Si necesitas PARTITION BY, incluye \"INTERMEDIARIO FINANCIERO\" en el SELECT y en el GROUP BY; si ya filtras a un solo banco, usa la ventana sin PARTITION BY.")
     if "LINEA ESPECIAL" in mapeos:
         reglas.append("- Si la pregunta menciona LINEA ESPECIAL, incluye \"LINEA ESPECIAL\" en el SELECT y en el GROUP BY para mostrar ese detalle junto con la BANCA o el intermediario.")
+    if sugerencias_limpias:
+        coincidencias_texto = ", ".join(sugerencias_limpias[:5])
+        reglas.append(
+            "- Valida los filtros sobre \"BENEFICIARIO\" utilizando literalmente uno de los siguientes nombres: "
+            f"{coincidencias_texto}."
+        )
     if filtra_beneficiario:
         ejemplo_regla = (ejemplo_beneficiario or "texto").upper()
-        regla_beneficiario = (
-            "- Para filtros sobre \"BENEFICIARIO\" usa ILIKE con comodines empleando el texto del usuario en MAYUSCULAS, "
-            f"por ejemplo \"BENEFICIARIO\" ILIKE '%{ejemplo_regla}%'."
-        )
+        if sugerencias_limpias:
+            regla_beneficiario = (
+                "- Para filtros sobre \"BENEFICIARIO\" usa ILIKE con comodines empleando el nombre validado, "
+                f"por ejemplo \"BENEFICIARIO\" ILIKE '%{ejemplo_regla}%'."
+            )
+        else:
+            regla_beneficiario = (
+                "- Para filtros sobre \"BENEFICIARIO\" usa ILIKE con comodines empleando el texto del usuario en MAYUSCULAS, "
+                f"por ejemplo \"BENEFICIARIO\" ILIKE '%{ejemplo_regla}%'."
+            )
         reglas.append(regla_beneficiario)
-
     reglas_texto = "\n".join(reglas)
-
-    prompt = (
-        "Eres un generador de consultas SQL para PostgreSQL. "
-        "Tu unica salida debe ser una consulta que comience por SELECT, sin ningun texto adicional. "
-        "Reglas importantes:\n"
-        f"{reglas_texto}\n"
-        "\nContexto de conversacion y resultados anteriores:\n"
-        f"{contexto}\n\n"
-        "Glosario de columnas y terminos asociados:\n"
-        f"{COLUMN_SYNONYMS_GLOSSARY or 'Sin glosario disponible'}\n\n"
-        "Esquema de la base de datos:\n"
-        f"{SCHEMA_DESCRIPCION}"
-    )
     prompt = (
         "Eres un generador de consultas SQL para PostgreSQL. "
         "Tu unica salida debe ser una consulta que comience por SELECT, sin ningun texto adicional. "
@@ -484,7 +487,12 @@ def generar_sql(pregunta: str, contexto: str) -> str:
         f"Pregunta del usuario: {pregunta}\n\n"
         f"Pistas de mapeo detectadas:\n{pistas_texto}"
     )
-
+    if sugerencias_limpias:
+        mensaje_usuario += (
+            "\n\nBeneficiarios validados:\n"
+            + "\n".join(f"- {nombre}" for nombre in sugerencias_limpias[:5])
+            + "\nUsa exactamente uno de estos nombres en la consulta."
+        )
     try:
         respuesta = client.chat.completions.create(
             model="gpt-4o",
@@ -500,7 +508,7 @@ def generar_sql(pregunta: str, contexto: str) -> str:
         if "```" in contenido:
             contenido = contenido.split("```")[-1].strip()
         if not contenido.lower().startswith("select"):
-            raise ValueError(f"La respuesta no es una consulta válida: {contenido}")
+            raise ValueError(f"La respuesta no es una consulta valida: {contenido}")
         sql = contenido.rstrip(";")
         print(f"[sql_agent] SQL generado en {time.time()-t0:.2f}s: {sql}")
         return sql
@@ -511,6 +519,7 @@ def generar_sql(pregunta: str, contexto: str) -> str:
             print(f"[sql_agent] SQL heuristico: {fallback_sql}")
             return fallback_sql
         raise
+
 
 
 def ejecutar_sql(sql: str):

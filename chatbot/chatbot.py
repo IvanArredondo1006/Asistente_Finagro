@@ -2,6 +2,7 @@ import streamlit as st
 import requests
 import json
 from PIL import Image
+import re  # <-- NUEVO: para extraer el filename del header
 
 st.set_page_config(page_title="Asistente de Proyectos Finagro", page_icon="🤖")
 st.title("🤖 Asistente de Proyectos Finagro")
@@ -46,7 +47,7 @@ with st.sidebar:
     st.subheader("Modo de consulta")
     mode = st.selectbox(
         "Selecciona el modo",
-        ["Asistente Finagro", "SQL (MEGAG)"],
+        ["SQL (MEGAG)", "Asistente Finagro"],
         index=0,
     )
 
@@ -85,11 +86,42 @@ if prompt := st.chat_input("Haz tu pregunta (normativa o SQL)"):
                 "ultimo_resultado_sql": ultimo_sql,
             }
 
+            # Llamada al endpoint según el modo
             if mode == "SQL (MEGAG)":
                 resp = requests.post(sql_api_url, headers=headers, data=json.dumps(payload))
             else:
                 resp = requests.post(assistant_api_url, headers=headers, data=json.dumps(payload))
 
+            # --- NUEVO: detectar si la respuesta es un Excel ---
+            content_type = resp.headers.get("Content-Type", "")
+            if "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" in content_type:
+                # Intentar extraer el nombre del archivo del header Content-Disposition
+                disp = resp.headers.get("Content-Disposition", "")
+                filename = "resultado.xlsx"
+                m = re.search(r'filename="?([^"]+)"?', disp)
+                if m:
+                    filename = m.group(1)
+
+                # Mensaje del asistente + botón de descarga dentro del chat
+                with st.chat_message("assistant"):
+                    st.markdown(f"Tu archivo **{filename}** está listo para descargar.")
+                    st.download_button(
+                        "⬇️ Descargar Excel",
+                        data=resp.content,
+                        file_name=filename,
+                        mime=content_type,
+                        key=f"dl_{filename}_{len(st.session_state.chat_history)}"
+                    )
+
+                # Opcional: agrega una marca mínima al historial (texto)
+                st.session_state.chat_history.append(
+                    {"role": "assistant", "content": f"[Excel generado: {filename}]"}
+                )
+
+                # No procesar JSON si ya entregamos Excel
+                st.stop()
+
+            # --- Respuesta JSON como antes ---
             data = resp.json()
 
             if "respuesta" in data:
@@ -106,6 +138,7 @@ if prompt := st.chat_input("Haz tu pregunta (normativa o SQL)"):
         except Exception as e:
             respuesta = f"Error al conectar con el backend: {e}"
 
+    # Mensaje normal del asistente (texto)
     st.chat_message("assistant").markdown(respuesta)
     st.session_state.chat_history.append({"role": "assistant", "content": respuesta})
 
