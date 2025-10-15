@@ -36,6 +36,44 @@ STOPWORDS_BENEFICIARIO = {
     "datos", "donde", "cuanto", "caul", "cliente", "opera",
 }
 
+# Ampliar stopwords para reducir falsos positivos (e.g., "han")
+ADDITIONAL_STOPWORDS = {
+    "han", "ha", "he", "hizo", "hacen", "hecho", "son", "es", "fue", "era", "ser",
+    "tabla", "promedio", "plazo", "tasa", "anio", "años", "año",
+}
+STOPWORDS_BENEFICIARIO |= ADDITIONAL_STOPWORDS
+
+def _menciona_nit(texto: str) -> bool:
+    t = (texto or "").lower()
+    return ("nit" in t) and bool(re.search(r"\b\d{5,}\b", t))
+
+def _menciona_nombre_beneficiario(texto: str) -> bool:
+    t = (texto or "").lower()
+    claves = ["beneficiario", "razon social", "razón social", "nombre", "empresa", "cliente"]
+    return any(k in t for k in claves)
+
+def _smart_candidatos_beneficiario(texto: str) -> List[str]:
+    """Extrae posibles nombres de beneficiario sólo si aplica.
+    - Si hay NIT presente, no busca candidatos.
+    - Sólo busca cuando el texto sugiere nombre/razón social.
+    - Prefiere tokens con alguna mayúscula (nombres propios) y longitud >= 3.
+    """
+    if not texto or _menciona_nit(texto) or not _menciona_nombre_beneficiario(texto):
+        return []
+    tokens = re.findall(r"[A-Za-zÁÉÍÓÚÜáéíóúüÑñ][A-Za-zÁÉÍÓÚÜáéíóúüÑñ\-]{2,}", texto)
+    candidatos: List[str] = []
+    vistos: set[str] = set()
+    for token in tokens:
+        norm = token.lower()
+        if norm in STOPWORDS_BENEFICIARIO:
+            continue
+        if not any(c.isupper() for c in token):
+            continue
+        if norm not in vistos:
+            vistos.add(norm)
+            candidatos.append(token)
+    return candidatos
+
 ### NUEVO BLOQUE ###
 
 # --- Helpers SQL ---
@@ -364,8 +402,8 @@ def _resolver_sql_con_reintentos(pregunta: str, contexto: str) -> tuple[List[Dic
     ultimo_error: Optional[str] = None
     resultados: List[Dict[str, Any]] = []
 
-    candidatos = _extraer_candidatos_beneficiario(pregunta)
-    sugerencias = _buscar_beneficiarios_similares(candidatos)
+    candidatos = _smart_candidatos_beneficiario(pregunta)
+    sugerencias = _buscar_beneficiarios_similares(candidatos) if candidatos else []
     contexto_enriquecido = (contexto or "").strip()
     if sugerencias:
         can = sugerencias[0]
@@ -451,7 +489,8 @@ async def asistente_finagro(payload: PreguntaPayload):
     contexto_sql = f"Resultado anterior:\n{json.dumps(ultimo_sql, ensure_ascii=False)}\n" if ultimo_sql else ""
     prompt_con_historial = f"{contexto_conversacional}\n{contexto_sql}\nUsuario: {pregunta}"
 
-    sugerencias_beneficiario = _buscar_beneficiarios_similares(_extraer_candidatos_beneficiario(pregunta))
+    cands_manual = _smart_candidatos_beneficiario(pregunta)
+    sugerencias_beneficiario = _buscar_beneficiarios_similares(cands_manual) if cands_manual else []
     respuesta_manual = consultar_assistant(prompt_con_historial)
 
     payload_manual: Dict[str, Any] = {"respuesta": respuesta_manual, "sugerencias_beneficiario": sugerencias_beneficiario}

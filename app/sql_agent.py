@@ -455,7 +455,9 @@ def generar_sql(pregunta: str, contexto: str, sugerencias_beneficiario: Optional
             "\nCoincidencias de beneficiario detectadas:\n"
             + "\n".join(f"- {nombre}" for nombre in sugerencias_limpias[:5])
         )
-    filtra_beneficiario = "BENEFICIARIO" in mapeos or bool(sugerencias_limpias)
+    combinado_texto = " ".join(filter(None, [pregunta, contexto]))
+    hay_nit = bool(re.search(r"\bNIT\b", combinado_texto, re.IGNORECASE) and re.search(r"\b\d{5,}\b", combinado_texto))
+    filtra_beneficiario = ("BENEFICIARIO" in mapeos or bool(sugerencias_limpias)) and ("NIT BENEFICIARIO" not in mapeos) and (not hay_nit)
     terminos_beneficiario = mapeos.get("BENEFICIARIO") or []
     if not terminos_beneficiario and sugerencias_limpias:
         terminos_beneficiario = sugerencias_limpias
@@ -606,6 +608,7 @@ def generar_respuesta_sql(
             "content": (
                 "Eres analista de datos para FINAGRO. Explica los hallazgos de forma clara para personas sin conocimiento tecnico. "
                 "Si hay datos tabulares, prioriza responder con cifras concretas y comparaciones sencillas. "
+                "Si el usuario te pide tablas entrega los datos en formato tabla"
                 "Si solo cuentas con hechos de referencia, resume la informacion tal cual aparece sin inventar datos nuevos."
             ),
         },
