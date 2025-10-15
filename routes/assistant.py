@@ -63,6 +63,7 @@ def _smart_candidatos_beneficiario(texto: str) -> List[str]:
     tokens = re.findall(r"[A-Za-zÁÉÍÓÚÜáéíóúüÑñ][A-Za-zÁÉÍÓÚÜáéíóúüÑñ\-]{2,}", texto)
     candidatos: List[str] = []
     vistos: set[str] = set()
+    # 1) Preferir tokens con mayúscula (nombres propios)
     for token in tokens:
         norm = token.lower()
         if norm in STOPWORDS_BENEFICIARIO:
@@ -72,7 +73,41 @@ def _smart_candidatos_beneficiario(texto: str) -> List[str]:
         if norm not in vistos:
             vistos.add(norm)
             candidatos.append(token)
+    if candidatos:
+        return candidatos
+    # 2) Fallback: permitir nombres en minúscula de 4+ caracteres no genéricos
+    for token in tokens:
+        norm = token.lower()
+        if norm in STOPWORDS_BENEFICIARIO:
+            continue
+        if len(norm) < 4:
+            continue
+        if norm not in vistos:
+            vistos.add(norm)
+            candidatos.append(token)
+    # 3) Fallback adicional: si hay conectores como "a X, dame ...", tomar el segmento tras "a " hasta coma/fin
+    if not candidatos:
+        m = re.search(r"\b(a|para)\s+([^,\.]+)", texto, flags=re.IGNORECASE)
+        if m:
+            frag = m.group(2).strip()
+            if frag and frag.lower() not in STOPWORDS_BENEFICIARIO:
+                candidatos.append(frag)
     return candidatos
+
+def _extraer_literal_beneficiario_de_sql(sql: str) -> Optional[str]:
+    if not sql:
+        return None
+    # Capturar '...BENEFICIARIO...' = 'LITERAL' o ILIKE '%LITERAL%'
+    m = re.search(r'BENEFICIARIO"\)\s*=\s*\'([^\']+)\'', sql, flags=re.IGNORECASE)
+    if m:
+        return m.group(1)
+    m2 = re.search(r'BENEFICIARIO\"\)\s+LIKE\s+\'\%([^\']+)\%\'', sql, flags=re.IGNORECASE)
+    if m2:
+        return m2.group(1)
+    m3 = re.search(r'\"BENEFICIARIO\"\s+ILIKE\s+\'\%([^\']+)\%\'', sql, flags=re.IGNORECASE)
+    if m3:
+        return m3.group(1)
+    return None
 
 ### NUEVO BLOQUE ###
 
@@ -136,6 +171,11 @@ def _construir_sql_forzado(sql_base: Optional[str], beneficiario: str) -> Option
         if re.search(pat, sql, flags=re.IGNORECASE | re.DOTALL):
             sql = re.sub(pat, cond_canon, sql, flags=re.IGNORECASE | re.DOTALL)
             reemplazado = True
+
+    # Intento adicional: reemplazar igualdad con UPPER("BENEFICIARIO") = '...'
+    if not reemplazado and re.search(r'UPPER\(\s*\"BENEFICIARIO\"\s*\)\s*=\s*\'[^\']+\'', sql, flags=re.IGNORECASE | re.DOTALL):
+        sql = re.sub(r'UPPER\(\s*\"BENEFICIARIO\"\s*\)\s*=\s*\'[^\']+\'', cond_canon, sql, flags=re.IGNORECASE | re.DOTALL)
+        reemplazado = True
 
     if not reemplazado:
         # Insertar WHERE/AND según corresponda
@@ -348,6 +388,31 @@ def _mensaje_sin_resultados_con_sugerencias(sugerencias: List[str]) -> str:
     )
 
 
+def _es_conteo_cero(datos: List[Dict[str, Any]]) -> bool:
+    """Detecta resultados de tipo conteo=0 (p.ej., filas con COUNT/CANTIDAD en cero).
+    Retorna True si existen columnas tipo conteo y su valor es 0 en todas las filas.
+    """
+    if not datos:
+        return False
+    claves = set()
+    for k in datos[0].keys():
+        ku = str(k).upper()
+        if ("COUNT" in ku) or ("CANT" in ku) or (ku.strip() in {"CANTIDAD", "TOTAL"}):
+            claves.add(k)
+    if not claves:
+        return False
+    # Si todas las claves de conteo están en 0 en todas las filas, lo consideramos cero
+    for fila in datos:
+        for k in claves:
+            v = fila.get(k)
+            try:
+                if float(v or 0) != 0.0:
+                    return False
+            except Exception:
+                return False
+    return True
+
+
 def _solicita_excel(pregunta: str, historial: List[Dict[str, Any]]) -> bool:
     """
     Heurística simple: si el usuario pide 'excel', 'xlsx', 'archivo', 'descargar', generamos Excel.
@@ -362,6 +427,18 @@ def _solicita_excel(pregunta: str, historial: List[Dict[str, Any]]) -> bool:
             if any(pal in t for pal in ["excel", "xlsx", "archivo", "descargar", "hoja de cálculo", "generar informe"]):
                 return True
     return False
+
+
+def _solicita_excel_estricto(pregunta: str) -> bool:
+    """
+    Solo considera la pregunta actual. Devuelve True si menciona exportar/generar Excel explícitamente.
+    """
+    texto = (pregunta or "").lower()
+    keywords = [
+        "excel", "xlsx", "archivo", "descargar", "hoja de c", "generar informe",
+        "archivo excel", "exporta", "exportar", "en excel", "formato excel",
+    ]
+    return any(pal in texto for pal in keywords)
 
 
 def _generar_excel_desde_resultados(filas: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -402,9 +479,11 @@ def _resolver_sql_con_reintentos(pregunta: str, contexto: str) -> tuple[List[Dic
     ultimo_error: Optional[str] = None
     resultados: List[Dict[str, Any]] = []
 
-    candidatos = _smart_candidatos_beneficiario(pregunta)
-    sugerencias = _buscar_beneficiarios_similares(candidatos) if candidatos else []
     contexto_enriquecido = (contexto or "").strip()
+    es_por_beneficiario = _menciona_nombre_beneficiario(pregunta) and not _menciona_nit(pregunta)
+    sugerencias: List[str] = []
+    resultado_de_conteo_cero = False
+    resultados_cero_guardados: List[Dict[str, Any]] = []
     if sugerencias:
         can = sugerencias[0]
         bloque_sugerencias = (
@@ -432,6 +511,9 @@ def _resolver_sql_con_reintentos(pregunta: str, contexto: str) -> tuple[List[Dic
             intentos.append(intento_info)
             continue
 
+        # Si el SQL hace referencia a BENEFICIARIO, confirmamos el tipo de consulta
+        if '"BENEFICIARIO"' in sql.upper():
+            es_por_beneficiario = True
         try:
             resultados = ejecutar_sql(sql)
             intento_info["filas"] = len(resultados)
@@ -443,10 +525,27 @@ def _resolver_sql_con_reintentos(pregunta: str, contexto: str) -> tuple[List[Dic
             continue
 
         if resultados:
-            return resultados, ultimo_sql, intentos, None, sugerencias
+            # Si es por beneficiario y es un conteo=0, disparamos fuzzy en post-proceso
+            if es_por_beneficiario and _es_conteo_cero(resultados):
+                intento_info["conteo_cero"] = True
+                resultado_de_conteo_cero = True
+                resultados_cero_guardados = resultados
+                # No retornamos aún; dejamos que pase al bloque de fuzzy
+            else:
+                return resultados, ultimo_sql, intentos, None, sugerencias
 
         intento_info["error"] = "sin_resultados"
         ultimo_error = "Consulta sin resultados"
+
+    # Si no hubo resultados y es por beneficiario, calculamos sugerencias fuzzy ahora
+    if (not resultados and es_por_beneficiario) or (resultado_de_conteo_cero and es_por_beneficiario):
+        cands_post = _smart_candidatos_beneficiario(pregunta)
+        # Fallback: si no se detectan candidatos desde la pregunta, intentar extraer literal del último SQL
+        if (not cands_post) and ultimo_sql:
+            lit = _extraer_literal_beneficiario_de_sql(ultimo_sql)
+            if lit:
+                cands_post = [lit]
+        sugerencias = _buscar_beneficiarios_similares(cands_post) if cands_post else []
 
     # Fallback "forzado" con beneficiario canónico si hay sugerencias y teníamos un SQL base
     if not resultados and sugerencias and ultimo_sql:
@@ -470,6 +569,10 @@ def _resolver_sql_con_reintentos(pregunta: str, contexto: str) -> tuple[List[Dic
                 intento_fx["error"] = f"ejecucion_forzado: {exc}"
                 intentos.append(intento_fx)
                 continue
+
+    # Si había conteo=0 y no logramos mejorar con forzado, devolvemos el conteo=0 junto a sugerencias
+    if resultado_de_conteo_cero and resultados_cero_guardados:
+        return resultados_cero_guardados, ultimo_sql, intentos, ultimo_error, sugerencias
 
     return (resultados if resultados else []), ultimo_sql, intentos, ultimo_error, sugerencias
 
@@ -505,7 +608,8 @@ async def asistente_finagro(payload: PreguntaPayload):
 async def asistente_sql(payload: PreguntaPayload):
     pregunta = payload.pregunta
     historial = payload.historial or []
-    solicitar_excel = _solicita_excel(pregunta, historial)
+    # Excel solo si se pide explícitamente en esta pregunta
+    solicitar_excel = _solicita_excel_estricto(pregunta)
 
     contexto_conversacional = ""
     for msg in historial[-10:]:
@@ -517,6 +621,9 @@ async def asistente_sql(payload: PreguntaPayload):
 
     excel_payload = _generar_excel_desde_resultados(datos) if solicitar_excel else None
     advertencia_sin_datos = _mensaje_sin_resultados_con_sugerencias(sugerencias_beneficiario) if not datos else ""
+    # Si hay datos pero representan conteo=0 y hay sugerencias, también mostramos el mensaje
+    if not advertencia_sin_datos and datos and _es_conteo_cero(datos) and sugerencias_beneficiario:
+        advertencia_sin_datos = _mensaje_sin_resultados_con_sugerencias(sugerencias_beneficiario)
     if solicitar_excel:
         if datos:
             respuesta = "Genero un archivo Excel con los datos solicitados."
