@@ -12,7 +12,7 @@ from app.config import OPENAI_API_KEY
 from app.rag import retrieve_facts
 from utils.diccionario import column_synonyms
 
-CLIENT_TIMEOUT = int(os.getenv("OPENAI_TIMEOUT", "30"))
+CLIENT_TIMEOUT = int(os.getenv("OPENAI_TIMEOUT", "60"))
 SUMMARY_THRESHOLD_CHARS = int(os.getenv("SQL_AGENT_SUMMARY_THRESHOLD", "900"))
 SUMMARY_MAX_TOKENS = int(os.getenv("SQL_AGENT_SUMMARY_MAX_TOKENS", "400"))
 client = OpenAI(api_key=OPENAI_API_KEY)
@@ -477,6 +477,12 @@ def generar_sql(pregunta: str, contexto: str, sugerencias_beneficiario: Optional
         "- Si la pregunta es ambigua, devuelve la mejor consulta que responda con los datos disponibles, prefiriendo conteos o listados generales.",
         "- Convierte los literales de texto a MAYUSCULAS y, cuando compares texto, aplica UPPER() o ILIKE segun corresponda.",
         "- Respeta los nombres de columnas exactamente como aparecen en el esquema (incluyendo tildes y caracteres especiales).",
+        "- Para SUM/AVG/MIN/MAX sobre columnas que pueden venir como texto, convierte a numeric con un CASE robusto y usa FILTER para excluir NULL.",
+        "  Ejemplo de conversion: CASE WHEN \"COL\"::text ~ '^-?\\d+(\\.\\d+)?$' THEN \"COL\"::numeric",
+        "    WHEN \"COL\"::text ~ '^-?\\d+(,\\d+)?$' THEN REPLACE(\"COL\"::text, ',', '.')::numeric",
+        "    WHEN \"COL\"::text ~ '^-?[0-9\\.,]+$' THEN REPLACE(REPLACE(\"COL\"::text, '.', ''), ',', '.')::numeric ELSE NULL END",
+        "- Evita COALESCE a 0 en promedios para no sesgar resultados; prefiere AVG(expr) FILTER (WHERE expr IS NOT NULL).",
+        "- Evita consultas con docenas de OR sobre \"BENEFICIARIO\"; prefiere ILIKE normalizado o un nombre validado.",
     ]
     if "BANCA" in mapeos:
         reglas.append("- Cuando la consulta pida resultados por BANCA, agrupa por \"BANCA\" y calcula el porcentaje sobre el total del banco. Si necesitas PARTITION BY, incluye \"INTERMEDIARIO FINANCIERO\" en el SELECT y en el GROUP BY; si ya filtras a un solo banco, usa la ventana sin PARTITION BY.")
@@ -580,6 +586,17 @@ def generar_respuesta_sql(
     if not datos and not usados:
         usados = retrieve_facts(pregunta)
 
+    # Si hay datos pero contienen valores nulos, agrega hechos de RAG como soporte
+    if datos and not usados:
+        try:
+            hay_nulos = any(any(v is None for v in fila.values()) for fila in datos)
+        except Exception:
+            hay_nulos = False
+        if hay_nulos:
+            extra = retrieve_facts(pregunta)
+            if extra:
+                usados.extend(extra)
+
     if not datos and not usados:
         mensaje = (
             "No encontre informacion directa en la base de datos ni en el indice contextual. "
@@ -609,6 +626,7 @@ def generar_respuesta_sql(
                 "Eres analista de datos para FINAGRO. Explica los hallazgos de forma clara para personas sin conocimiento tecnico. "
                 "Si hay datos tabulares, prioriza responder con cifras concretas y comparaciones sencillas. "
                 "Si el usuario te pide tablas entrega los datos en formato tabla"
+                "Haz analisis estadisticos de la información recibida y saca conclusiones relevantes."
                 "Si solo cuentas con hechos de referencia, resume la informacion tal cual aparece sin inventar datos nuevos."
             ),
         },

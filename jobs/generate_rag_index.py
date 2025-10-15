@@ -1,4 +1,4 @@
-﻿import logging
+import logging
 import re
 from dataclasses import dataclass
 from datetime import date
@@ -6,6 +6,13 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Dict, Iterable, List
 
+import sys
+
+# Ensure we can import the package-local modules when run as a script
+_THIS_FILE = Path(__file__).resolve()
+_PKG_ROOT = _THIS_FILE.parents[1]  # Asistente_Finagro/
+if str(_PKG_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PKG_ROOT))
 import chromadb
 from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
 from psycopg2.extras import DictCursor
