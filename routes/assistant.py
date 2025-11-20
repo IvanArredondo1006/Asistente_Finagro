@@ -10,6 +10,7 @@ from io import BytesIO
 from app.sql_agent import generar_sql, ejecutar_sql, generar_respuesta_sql
 from app.assistant_agent import consultar_assistant
 from models.payload import PreguntaPayload
+from utils.logger import LOGGER
 
 try:
     import pandas as pd  # type: ignore
@@ -663,5 +664,9 @@ async def asistente_sql(payload: PreguntaPayload):
     #     "error_sql": error_sql,
     #     "intentos_sql": intentos_sql,
     # }, ensure_ascii=False))
+    try:
+        LOGGER.info("asistente_sql | pregunta=%s | filas=%d | sql=%s | error=%s | excel=%s | grafico=%s", pregunta, len(datos or []), (sql_generado or "").replace("\n"," ")[:1000], error_sql or "", bool(excel_payload), bool(locals().get("grafico_payload")))
+    except Exception:
+        pass
 
     return payload_resp

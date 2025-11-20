@@ -6,7 +6,7 @@ column_synonyms = {
         "nit", "nÃºmero de identificaciÃ³n", "id beneficiario", "identificaciÃ³n tributaria"
     ],
     "BENEFICIARIO": [
-        "cliente", "persona", "productor", "razÃ³n social", "nombre beneficiario"
+        "cliente", "persona", "productor", "razÃ³n social", "nombre beneficiario", "empresa"
     ],
     "DIRECCION BENEFICIARIO": [
         "direcciÃ³n", "domicilio", "ubicaciÃ³n beneficiario", "residencia"
@@ -90,13 +90,13 @@ column_synonyms = {
         "tipo comisiÃ³n", "clase comisiÃ³n", "comisiÃ³n"
     ],
     "LINEA ESPECIAL": [
-        "lÃ­nea especial", "programa especial", "lÃ­nea crÃ©dito especial"
+        "lÃ­nea especial", "programa especial", "lÃ­nea crÃ©dito especial, destino"
     ],
     "COD": [
         "cÃ³digo", "id", "referencia"
     ],
     "RUBRO": [
-        "rubro", "categorÃ­a gasto", "concepto"
+        "rubro",
     ],
     "NOMBRE RUBRO": [
         "nombre rubro", "detalle rubro", "descripciÃ³n rubro"
@@ -147,7 +147,7 @@ column_synonyms = {
         "nÃºmero ajuste", "ajuste", "id ajuste"
     ],
     "JUSTIFICACION": [
-        "descripciÃ³n actividad", "detalle actividad", "a que se dedica"
+        "descripciÃ³n actividad", "detalle actividad", "a que se dedica", "que hace"
     ],
     "TIPO DE ACCION (ELABORADO / AJUSTE)": [
         "tipo acciÃ³n", "acciÃ³n realizada", "estado"

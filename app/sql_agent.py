@@ -10,12 +10,18 @@ import unicodedata
 from app.db import get_db_connection
 from app.config import OPENAI_API_KEY
 from app.rag import retrieve_facts
+from utils.logger import LOGGER
 from utils.diccionario import column_synonyms
 
 CLIENT_TIMEOUT = int(os.getenv("OPENAI_TIMEOUT", "60"))
 SUMMARY_THRESHOLD_CHARS = int(os.getenv("SQL_AGENT_SUMMARY_THRESHOLD", "900"))
 SUMMARY_MAX_TOKENS = int(os.getenv("SQL_AGENT_SUMMARY_MAX_TOKENS", "400"))
+# Limites para proteger la generacion NL cuando hay muchos datos
+MAX_ROWS_FOR_CHAT = int(os.getenv("SQL_AGENT_MAX_ROWS_FOR_CHAT", "500"))
+MAX_JSON_CHARS_FOR_CHAT = int(os.getenv("SQL_AGENT_MAX_JSON_CHARS_FOR_CHAT", "20000"))
 client = OpenAI(api_key=OPENAI_API_KEY)
+MAX_ROWS_FOR_CHAT = int(os.getenv("SQL_AGENT_MAX_ROWS_FOR_CHAT", "500"))
+MAX_JSON_CHARS_FOR_CHAT = int(os.getenv("SQL_AGENT_MAX_JSON_CHARS_FOR_CHAT", "20000"))
 
 
 def obtener_esquema() -> tuple[str, Dict[str, List[str]]]:
@@ -444,7 +450,7 @@ def _resumir_respuesta_larga(texto: str, total_filas: int) -> Optional[str]:
 def generar_sql(pregunta: str, contexto: str, sugerencias_beneficiario: Optional[List[str]] = None) -> str:
     t0 = time.time()
     sugerencias_limpias = [nombre for nombre in (sugerencias_beneficiario or []) if nombre]
-    print(f"[sql_agent] Generando SQL para: {pregunta[:120]}")
+    LOGGER.info("[sql_agent] Generando SQL para: %s", pregunta[:120])
     mapeos = _detectar_mapeos(pregunta, contexto)
     pistas_texto = _formatear_pistas(mapeos)
     bancos_detectados = _extraer_bancos_canonicos(pregunta, contexto)
@@ -547,13 +553,13 @@ def generar_sql(pregunta: str, contexto: str, sugerencias_beneficiario: Optional
         if not contenido.lower().startswith("select"):
             raise ValueError(f"La respuesta no es una consulta valida: {contenido}")
         sql = contenido.rstrip(";")
-        print(f"[sql_agent] SQL generado en {time.time()-t0:.2f}s: {sql}")
+        LOGGER.info("[sql_agent] SQL generado en %.2fs: %s", time.time()-t0, sql)
         return sql
     except Exception as exc:  # noqa: BLE001
-        print(f"[sql_agent] Fallback heuristico por error: {exc}")
+        LOGGER.info("[sql_agent] Fallback heuristico por error: %s", exc)
         fallback_sql = _construir_sql_heuristico(pregunta, contexto, mapeos)
         if fallback_sql:
-            print(f"[sql_agent] SQL heuristico: {fallback_sql}")
+            LOGGER.info("[sql_agent] SQL heuristico: %s", fallback_sql)
             return fallback_sql
         raise
 
@@ -561,7 +567,7 @@ def generar_sql(pregunta: str, contexto: str, sugerencias_beneficiario: Optional
 
 def ejecutar_sql(sql: str):
     t0 = time.time()
-    print(f"[sql_agent] Ejecutando SQL: {sql}")
+    LOGGER.info("[sql_agent] Ejecutando SQL: %s", sql)
     with get_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(sql)
@@ -571,7 +577,7 @@ def ejecutar_sql(sql: str):
         {col: float(val) if isinstance(val, Decimal) else val for col, val in zip(columnas, fila)}
         for fila in filas
     ]
-    print(f"[sql_agent] Ejecutado en {time.time()-t0:.2f}s, filas: {len(resultados)}")
+    LOGGER.info("[sql_agent] Ejecutado en %.2fs, filas: %d", time.time()-t0, len(resultados))
     return resultados
 
 
@@ -605,9 +611,19 @@ def generar_respuesta_sql(
         return mensaje, []
 
     t0 = time.time()
-    print(
-        f"[sql_agent] Generando respuesta NL, filas={len(datos)} hechos={len(usados)}"
-    )
+    LOGGER.info("[sql_agent] Generando respuesta NL, filas=%d hechos=%d", len(datos), len(usados))
+    # Demasiadas filas para chat -> sugerir Excel en lugar de saturar tokens
+    if datos:
+        try:
+            _json_len = len(json.dumps(datos, ensure_ascii=False))
+        except Exception:
+            _json_len = 0
+        if len(datos) > MAX_ROWS_FOR_CHAT or _json_len > MAX_JSON_CHARS_FOR_CHAT:
+            msg = (
+                f"La consulta recupero {len(datos)} filas. Es mucha informacion para mostrar en pantalla. "
+                "Si deseas el detalle completo, pideme un Excel con la informacion."
+            )
+            return msg, usados
 
     piezas_usuario = [f"Pregunta: {pregunta}"]
     if datos:
@@ -633,14 +649,21 @@ def generar_respuesta_sql(
         {"role": "user", "content": "\n\n".join(piezas_usuario)},
     ]
 
-    respuesta = client.chat.completions.create(
-        model="gpt-4o",
-        messages=mensajes,
-        max_tokens=1000,
-        temperature=0.2,
-        timeout=CLIENT_TIMEOUT,
-    )
-    texto = respuesta.choices[0].message.content.strip()
+    try:
+        respuesta = client.chat.completions.create(
+            model="gpt-4o",
+            messages=mensajes,
+            max_tokens=1000,
+            temperature=0.2,
+            timeout=CLIENT_TIMEOUT,
+        )
+        texto = respuesta.choices[0].message.content.strip()
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.info("[sql_agent] Error generando respuesta NL: %s", exc)
+        texto = (
+            "La consulta contiene demasiada informacion para el chat. "
+            "Si deseas el detalle completo, pideme un Excel con la informacion."
+        )
     if len(texto) > SUMMARY_THRESHOLD_CHARS:
         resumen = _resumir_respuesta_larga(texto, len(datos))
         if resumen:
@@ -649,5 +672,5 @@ def generar_respuesta_sql(
             texto = texto[:SUMMARY_THRESHOLD_CHARS].rstrip() + "..."
             if "excel" not in texto.lower():
                 texto += "\n\nSi necesitas el detalle completo, pideme un Excel con la informacion."
-    print(f"[sql_agent] Respuesta generada en {time.time()-t0:.2f}s")
+    LOGGER.info("[sql_agent] Respuesta generada en %.2fs", time.time()-t0)
     return texto, usados
