@@ -52,8 +52,8 @@ with st.sidebar:
         index=0,
     )
 
-    DEFAULT_ASSISTANT_API_URL = "http://127.0.0.1:8002/asistente-finagro"
-    DEFAULT_SQL_API_URL = "http://127.0.0.1:8002/asistente-sql"
+    DEFAULT_ASSISTANT_API_URL = "http://127.0.0.1:8004/asistente-finagro"
+    DEFAULT_SQL_API_URL = "http://127.0.0.1:8004/asistente-sql"
 
     # Endpoints fijos (no visibles en el front)
     assistant_api_url = DEFAULT_ASSISTANT_API_URL

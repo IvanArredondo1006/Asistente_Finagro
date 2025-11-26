@@ -73,7 +73,7 @@ COLUMN_SYNONYMS_GLOSSARY = "\n".join(
 
 RAW_BANCO_SYNONYMS = {
     "BANCO AV VILLAS": ["AV VILLAS", "AVVILLAS"],
-    "BANCO DE BOGOTÁ": ["BANCO DE BOGOTA", "BANCO DE BOGOTÁ"],
+    "BANCO DE BOGOTA": ["BANCO DE BOGOTA", "BANCO DE BOGOTA"],
     "BANCO DE OCCIDENTE": ["BANCO DE OCCIDENTE"],
     "BANCO FINANDINA": ["FINANDINA", "BANCO FINANDINA"],
     "BANCO SANTANDER": ["SANTANDER", "BANCO SANTANDER"],
@@ -83,11 +83,11 @@ RAW_BANCO_SYNONYMS = {
     ],
     "BANCOLOMBIA": ["BANCOLOMBIA", "BANCOLOMBIA S.A."],
     "BBVA COLOMBIA": ["BBVA", "BBVA COLOMBIA"],
-    "IRIS CF - COMPAÑIA DE FINANCIAMIENTO S.A.": [
-        "IRIS", "IRIS CF", "IRIS CF - COMPAÑIA DE FINANCIAMIENTO S.A.",
+    "IRIS CF - COMPAAIA DE FINANCIAMIENTO S.A.": [
+        "IRIS", "IRIS CF", "IRIS CF - COMPAAIA DE FINANCIAMIENTO S.A.",
     ],
-    "ITAÚ CORPBANCA COLOMBIA S.A.": [
-        "ITAÚ", "ITAU", "ITAÚ CORPBANCA", "ITAÚ CORPBANCA COLOMBIA S.A.",
+    "ITAA CORPBANCA COLOMBIA S.A.": [
+        "ITAA", "ITAU", "ITAA CORPBANCA", "ITAA CORPBANCA COLOMBIA S.A.",
     ],
 }
 
@@ -121,7 +121,7 @@ def _extraer_bancos_canonicos(*textos: str) -> List[str]:
     for texto in textos:
         if not texto:
             continue
-        for token in re.findall(r"[\wÁÉÍÓÚÜÑáéíóúüñ]+", texto):
+        for token in re.findall(r"[\wAAAAAAAA!A(c)AA3AoA 1/4A+-]+", texto):
             clave = _normalizar_clave_banco(token)
             if not clave:
                 continue
@@ -161,7 +161,7 @@ def _formatear_pistas(mapeos: Dict[str, List[str]]) -> str:
     ]
     pistas = "\n".join(lineas)
     return (
-        "Equivalencias detectadas entre términos de la conversación y columnas del esquema:\n"
+        "Equivalencias detectadas entre tA(c)rminos de la conversaciA3n y columnas del esquema:\n"
         f"{pistas}\nUsa exactamente esos nombres de columna entre comillas dobles."
     )
 
@@ -642,7 +642,7 @@ def generar_respuesta_sql(
                 "Eres analista de datos para FINAGRO. Explica los hallazgos de forma clara para personas sin conocimiento tecnico. "
                 "Si hay datos tabulares, prioriza responder con cifras concretas y comparaciones sencillas. "
                 "Si el usuario te pide tablas entrega los datos en formato tabla"
-                "Haz analisis estadisticos de la información recibida y saca conclusiones relevantes."
+                "Haz analisis estadisticos de la informaciA3n recibida y saca conclusiones relevantes."
                 "Si solo cuentas con hechos de referencia, resume la informacion tal cual aparece sin inventar datos nuevos."
             ),
         },
@@ -664,6 +664,10 @@ def generar_respuesta_sql(
             "La consulta contiene demasiada informacion para el chat. "
             "Si deseas el detalle completo, pideme un Excel con la informacion."
         )
+    if usados and (not texto or "no encontre" in texto.lower()):
+        bullets = "\n".join(f"- {h.get('text', '')}" for h in usados if isinstance(h, dict) and h.get('text'))
+        if bullets:
+            texto = "No se pudo ejecutar la consulta SQL, pero encontre estos hechos relevantes:\n" + bullets
     if len(texto) > SUMMARY_THRESHOLD_CHARS:
         resumen = _resumir_respuesta_larga(texto, len(datos))
         if resumen:

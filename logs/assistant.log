@@ -43,3 +43,42 @@ HAVING COUNT(*) > 1
 2025-11-20 11:27:33,740 | INFO | [sql_agent] Generando respuesta NL, filas=1 hechos=0
 2025-11-20 11:27:36,647 | INFO | [sql_agent] Respuesta generada en 2.91s
 2025-11-20 11:27:36,648 | INFO | asistente_sql | pregunta=Cuantos desembolsos se le ha hecho a exito en 2025 | filas=1 | sql=SELECT COUNT(*) FROM beneficiarios WHERE "beneficiario_normalizado" ILIKE '%EXITO%' AND "ANO DESEMBOLSO" = '2025' | error= | excel=False | grafico=False
+2025-11-20 12:19:25,532 | INFO | [sql_agent] Generando SQL para: Cuantos desembolsos se le ha hecho a colanta?
+2025-11-20 12:19:30,341 | INFO | [sql_agent] SQL generado en 4.81s: SELECT COUNT(*) FROM beneficiarios WHERE "BENEFICIARIO" ILIKE '%COLANTA%'
+2025-11-20 12:19:30,342 | INFO | [sql_agent] Ejecutando SQL: SELECT COUNT(*) FROM beneficiarios WHERE "BENEFICIARIO" ILIKE '%COLANTA%'
+2025-11-20 12:19:31,056 | INFO | [sql_agent] Ejecutado en 0.71s, filas: 1
+2025-11-20 12:19:31,056 | INFO | [sql_agent] Generando respuesta NL, filas=1 hechos=0
+2025-11-20 12:19:32,736 | INFO | [sql_agent] Respuesta generada en 1.68s
+2025-11-20 12:19:32,737 | INFO | asistente_sql | pregunta=Cuantos desembolsos se le ha hecho a colanta? | filas=1 | sql=SELECT COUNT(*) FROM beneficiarios WHERE "BENEFICIARIO" ILIKE '%COLANTA%' | error= | excel=False | grafico=False
+2025-11-26 12:18:05,672 | INFO | [sql_agent] Generando SQL para: Cual es el nit de crepes y walffes
+
+
+2025-11-26 12:18:08,077 | INFO | [sql_agent] SQL generado en 2.41s: SELECT "NIT BENEFICIARIO" FROM beneficiarios WHERE UPPER("BENEFICIARIO") = 'CREPES Y WALFFES'
+2025-11-26 12:18:08,077 | INFO | [sql_agent] Ejecutando SQL: SELECT "NIT BENEFICIARIO" FROM beneficiarios WHERE UPPER("BENEFICIARIO") = 'CREPES Y WALFFES'
+2025-11-26 12:18:11,257 | INFO | [sql_agent] Ejecutado en 3.18s, filas: 0
+2025-11-26 12:18:11,258 | INFO | [sql_agent] Generando SQL para: Cual es el nit de crepes y walffes
+
+
+2025-11-26 12:18:12,499 | INFO | [sql_agent] SQL generado en 1.24s: SELECT "NIT BENEFICIARIO" FROM beneficiarios WHERE UPPER("BENEFICIARIO") = 'CREPES Y WALFFES'
+2025-11-26 12:18:12,500 | INFO | [sql_agent] Ejecutando SQL: SELECT "NIT BENEFICIARIO" FROM beneficiarios WHERE UPPER("BENEFICIARIO") = 'CREPES Y WALFFES'
+2025-11-26 12:18:12,591 | INFO | [sql_agent] Ejecutado en 0.09s, filas: 0
+2025-11-26 12:18:12,591 | INFO | [sql_agent] Generando SQL para: Cual es el nit de crepes y walffes
+
+
+2025-11-26 12:18:13,329 | INFO | [sql_agent] SQL generado en 0.74s: SELECT "NIT BENEFICIARIO" FROM beneficiarios WHERE UPPER("BENEFICIARIO") = 'CREPES Y WALFFES'
+2025-11-26 12:18:13,329 | INFO | [sql_agent] Ejecutando SQL: SELECT "NIT BENEFICIARIO" FROM beneficiarios WHERE UPPER("BENEFICIARIO") = 'CREPES Y WALFFES'
+2025-11-26 12:18:13,391 | INFO | [sql_agent] Ejecutado en 0.06s, filas: 0
+2025-11-26 12:18:13,391 | INFO | [sql_agent] Ejecutando SQL: SELECT DISTINCT "BENEFICIARIO" FROM beneficiarios WHERE unaccent(upper("BENEFICIARIO")) LIKE ('%' || unaccent(upper('CREPES Y WALFFES')) || '%') ORDER BY "BENEFICIARIO" LIMIT 5
+2025-11-26 12:18:13,902 | INFO | [sql_agent] Ejecutado en 0.51s, filas: 0
+2025-11-26 12:18:13,902 | INFO | [sql_agent] Ejecutando SQL: SELECT DISTINCT "BENEFICIARIO" FROM beneficiarios WHERE unaccent(upper("BENEFICIARIO")) LIKE ('%' || unaccent(upper('CREPES Y WALFFES')) || '%') ORDER BY "BENEFICIARIO" LIMIT 5
+2025-11-26 12:18:14,038 | INFO | [sql_agent] Ejecutado en 0.14s, filas: 0
+2025-11-26 12:18:14,039 | INFO | [sql_agent] Ejecutando SQL: SELECT DISTINCT "BENEFICIARIO", unaccent(upper("BENEFICIARIO")) as nombre_norm, similarity(unaccent(upper("BENEFICIARIO")), unaccent(upper('CREPES Y WALFFES'))) AS sim FROM beneficiarios WHERE similarity(unaccent(upper("BENEFICIARIO")), unaccent(upper('CREPES Y WALFFES'))) > 0.25 ORDER BY sim DESC LIMIT 5
+2025-11-26 12:18:14,573 | INFO | [sql_agent] Ejecutado en 0.53s, filas: 3
+2025-11-26 12:18:14,574 | INFO | [sql_agent] Ejecutando SQL: SELECT DISTINCT "BENEFICIARIO" FROM beneficiarios ORDER BY levenshtein(unaccent(upper("BENEFICIARIO")), unaccent(upper('CREPES Y WALFFES'))) ASC LIMIT 2
+2025-11-26 12:18:14,655 | INFO | [sql_agent] Ejecutando SQL: SELECT "NIT BENEFICIARIO" FROM beneficiarios WHERE unaccent(upper("BENEFICIARIO")) LIKE ('%' || unaccent(upper('CREPES Y WAFFLES ')) || '%')
+2025-11-26 12:18:14,765 | INFO | [sql_agent] Ejecutado en 0.11s, filas: 4
+2025-11-26 12:18:14,766 | INFO | [sql_agent] Generando respuesta NL, filas=4 hechos=0
+2025-11-26 12:18:16,047 | INFO | [sql_agent] Respuesta generada en 1.28s
+2025-11-26 12:18:16,051 | INFO | asistente_sql | pregunta=Cual es el nit de crepes y walffes
+
+ | filas=4 | sql=SELECT "NIT BENEFICIARIO" FROM beneficiarios WHERE UPPER("BENEFICIARIO") = 'CREPES Y WALFFES' | error= | excel=False | grafico=False
